@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let state = { tweets: {}, serverDown: false, syncStatus: null, xApi: null };
+let state = { tweets: {}, serverDown: false, syncStatus: null, loggedOut: false };
 let notice = '';
 
 const send = (msg) => chrome.runtime.sendMessage(msg);
@@ -114,7 +114,7 @@ function render() {
   $('count').textContent = shown.length === all.length ? String(all.length) : `${shown.length} of ${all.length}`;
   $('pending').textContent = `Summarize pending (${all.filter((t) => t.status !== 'summarized').length})`;
   $('banner').hidden = !state.serverDown;
-  $('needApi').hidden = !!state.xApi?.Bookmarks;
+  $('loggedOut').hidden = !state.loggedOut;
 
   const s = state.syncStatus;
   const running = s?.running && Date.now() - (s.startedAt || 0) < 10 * 60 * 1000;
@@ -128,7 +128,7 @@ function render() {
 }
 
 async function load() {
-  state = { tweets: {}, serverDown: false, syncStatus: null, xApi: null, ...(await chrome.storage.local.get(['tweets', 'serverDown', 'syncStatus', 'xApi'])) };
+  state = { tweets: {}, serverDown: false, syncStatus: null, loggedOut: false, ...(await chrome.storage.local.get(['tweets', 'serverDown', 'syncStatus', 'loggedOut'])) };
   render();
 }
 
@@ -149,3 +149,4 @@ $('exportJson').addEventListener('click', () => download('json'));
 $('exportMd').addEventListener('click', () => download('markdown'));
 chrome.storage.onChanged.addListener((_, area) => area === 'local' && load());
 load();
+send({ type: 'syncIfStale' });
