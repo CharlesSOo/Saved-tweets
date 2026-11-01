@@ -21,7 +21,7 @@ function el(tag, attrs = {}, ...children) {
   return e;
 }
 
-const LINK = 'text-[#2563eb] hover:underline break-all';
+const LINK = 'text-[#60a5fa] hover:underline break-all';
 const URL_RE = /https?:\/\/[^\s]+/g;
 
 // Text with URLs rendered as links showing the URL without the scheme.
@@ -48,24 +48,38 @@ function avatar(t) {
   }
   const letter = (t.author || t.handle || '?').replace(/^@/, '').charAt(0).toUpperCase() || '?';
   return el('div', { class: 'avatar avatar-placeholder shrink-0' },
-    el('div', { class: 'w-10 rounded-full bg-neutral-200 text-neutral-600' }, el('span', { class: 'text-sm' }, letter)));
+    el('div', { class: 'w-10 rounded-full bg-base-300 text-muted' }, el('span', { class: 'text-sm' }, letter)));
 }
 
 function menuItem(label, onclick) {
   return el('li', {}, el('button', { onclick: (e) => { document.activeElement?.blur(); onclick(e); } }, label));
 }
 
-function statusLabel(t) {
-  if (t.summarizing) return el('span', { class: 'flex items-center gap-1 text-xs text-neutral-500' }, el('span', { class: 'loading loading-spinner loading-xs' }), 'Summarizing');
-  const label = t.needsFetch ? 'content not captured' : t.status === 'summarized' ? null : t.status;
-  return label && el('span', { class: 'badge badge-ghost badge-sm text-neutral-500' }, label);
+function summaryBlock(t) {
+  let body;
+  if (t.summarizing) {
+    body = el('div', { class: 'flex items-center gap-2 text-muted text-sm' }, el('span', { class: 'loading loading-spinner loading-xs' }), 'Summarizing…');
+  } else if (t.summary && t.status === 'summarized') {
+    body = el('div', { class: 'text-[15px] leading-[1.45] text-base-content' }, md(t.summary));
+  } else if (t.status === 'failed') {
+    body = el('div', { class: 'text-sm text-muted space-y-1' },
+      el('p', {}, 'Summary failed.'),
+      t.error && el('p', { class: 'text-xs whitespace-pre-wrap break-words' }, t.error),
+      el('button', { class: 'btn btn-xs mt-1', onclick: () => send({ type: 'summarize', id: t.id }) }, 'Retry'));
+  } else {
+    const why = t.needsFetch ? 'Waiting for the tweet content.' : !t.threadChecked ? 'Fetching thread, then summarizing…' : state.serverDown ? 'Pending: summarizer server not reachable.' : 'Pending.';
+    body = el('p', { class: 'text-sm text-muted' }, why);
+  }
+  return el('section', { class: 'rounded-r-lg border-l-2 border-[#7c8cff] bg-[#1e2230] px-3 py-2.5 space-y-1.5' },
+    el('div', { class: 'flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#a5b0ff]' }, el('span', { 'aria-hidden': 'true' }, '✦'), 'Summary'),
+    body);
 }
 
 function card(t) {
   const handle = (t.handle || '').replace(/^@/, '');
-  const text = t.needsFetch ? el('em', { class: 'text-neutral-500' }, 'content not captured') : linkify(t.text || '');
+  const text = t.needsFetch ? el('em', { class: 'text-muted' }, 'content not captured') : linkify(t.text || '');
   const images = (t.media || []).filter((u) => !/\.mp4(\?|$)/.test(u));
-  return el('article', { id: `card-${t.id}`, class: 'card bg-base-100 border border-[#e5e5e5] rounded-xl transition-shadow' },
+  return el('article', { id: `card-${t.id}`, class: 'card bg-base-100 border border-base-300 rounded-xl transition-shadow' },
     el('div', { class: 'card-body p-4 gap-3' },
       el('div', { class: 'flex items-start gap-3' },
         avatar(t),
@@ -73,13 +87,12 @@ function card(t) {
           handle
             ? el('a', { href: `https://x.com/${handle}`, target: '_blank', class: 'font-bold hover:underline truncate' }, t.author || handle)
             : el('span', { class: 'font-bold' }, 'Unknown'),
-          handle && el('span', { class: 'text-neutral-500 text-sm' }, '@' + handle),
-          el('span', { class: 'text-neutral-400 text-sm' }, '·'),
-          el('a', { href: t.url, target: '_blank', class: 'text-neutral-500 text-sm hover:underline' }, shortDate(t.createdAt)),
-          el('span', { class: 'ml-1' }, statusLabel(t)),
+          handle && el('span', { class: 'text-muted text-sm' }, '@' + handle),
+          el('span', { class: 'text-muted text-sm' }, '·'),
+          el('a', { href: t.url, target: '_blank', class: 'text-muted text-sm hover:underline' }, shortDate(t.createdAt)),
         ),
         el('div', { class: 'dropdown dropdown-end' },
-          el('div', { tabindex: '0', role: 'button', class: 'btn btn-ghost btn-sm btn-circle text-neutral-500', 'aria-label': 'Actions' }, '⋯'),
+          el('div', { tabindex: '0', role: 'button', class: 'btn btn-ghost btn-sm btn-circle text-muted', 'aria-label': 'Actions' }, '⋯'),
           el('ul', { tabindex: '0', class: 'dropdown-content menu menu-sm z-10 w-40 rounded-box border border-base-300 bg-base-100 p-1 shadow-sm' },
             !t.needsFetch && menuItem('Summarize', () => send({ type: 'summarize', id: t.id })),
             menuItem('Open on X', () => window.open(t.url, '_blank')),
@@ -87,16 +100,15 @@ function card(t) {
           ),
         ),
       ),
-      el('div', { class: 'text-[15px] leading-[1.45] text-[#171717] whitespace-pre-wrap break-words' }, text),
-      t.thread && el('details', { class: 'text-[15px] leading-[1.45] text-[#171717]' },
-        el('summary', { class: 'cursor-pointer text-sm text-neutral-500' }, 'Show thread'),
+      el('div', { class: 'text-[15px] leading-[1.45] text-base-content whitespace-pre-wrap break-words' }, text),
+      summaryBlock(t),
+      t.thread && el('details', { class: 'text-[15px] leading-[1.45] text-base-content' },
+        el('summary', { class: 'cursor-pointer text-sm text-muted' }, 'Show thread'),
         el('div', { class: 'whitespace-pre-wrap break-words mt-2' }, linkify(t.thread))),
       images.length > 0 && el('div', { class: 'grid grid-cols-2 gap-1.5' },
-        images.map((src) => el('a', { href: src, target: '_blank' }, el('img', { src, loading: 'lazy', class: 'w-full h-40 object-cover rounded-lg border border-[#e5e5e5]' })))),
-      t.quoted && el('div', { class: 'border border-[#e5e5e5] rounded-lg p-3 text-sm text-neutral-600 whitespace-pre-wrap break-words' }, linkify(t.quoted)),
-      t.summary && el('div', { class: 'bg-[#fafafa] border-l-2 border-[#d4d4d4] rounded-r-md px-3 py-2 text-sm text-[#404040]' }, md(t.summary)),
-      t.detailError && el('p', { class: 'text-xs text-neutral-500' }, t.detailError),
-      t.error && el('p', { class: 'text-xs text-neutral-500 whitespace-pre-wrap' }, t.error),
+        images.map((src) => el('a', { href: src, target: '_blank' }, el('img', { src, loading: 'lazy', class: 'w-full h-40 object-cover rounded-lg border border-base-300' })))),
+      t.quoted && el('div', { class: 'border border-base-300 rounded-lg p-3 text-sm text-muted whitespace-pre-wrap break-words' }, linkify(t.quoted)),
+      t.detailError && el('p', { class: 'text-xs text-muted' }, t.detailError),
     ),
   );
 }
@@ -125,7 +137,7 @@ function render() {
   $('notice').textContent = [detailLine, syncLine].filter(Boolean).join(' · ');
 
 
-  $('list').replaceChildren(...(shown.length ? shown.map(card) : [el('p', { class: 'text-center text-sm text-neutral-500 py-10' }, 'No bookmarks.')]));
+  $('list').replaceChildren(...(shown.length ? shown.map(card) : [el('p', { class: 'text-center text-sm text-muted py-10' }, 'No bookmarks.')]));
 }
 
 async function load() {
@@ -170,16 +182,16 @@ let chatBusy = false;
 
 function miniCard(id) {
   const t = state.tweets[id];
-  if (!t) return el('span', { class: 'text-xs text-neutral-500' }, `[tweet ${id}]`);
+  if (!t) return el('span', { class: 'text-xs text-muted' }, `[tweet ${id}]`);
   const snippet = (t.text || '').replace(/\s+/g, ' ').slice(0, 80) + ((t.text || '').length > 80 ? '…' : '');
   const pic = t.avatar
     ? el('img', { src: t.avatar, alt: '', class: 'w-4 h-4 rounded-full shrink-0' })
-    : el('span', { class: 'w-4 h-4 rounded-full bg-neutral-200 text-[9px] text-neutral-600 flex items-center justify-center shrink-0' }, (t.author || '?').charAt(0).toUpperCase());
+    : el('span', { class: 'w-4 h-4 rounded-full bg-base-300 text-[9px] text-muted flex items-center justify-center shrink-0' }, (t.author || '?').charAt(0).toUpperCase());
   return el('button', {
     type: 'button',
-    class: 'inline-flex items-center gap-1.5 max-w-full align-middle my-0.5 px-2 py-0.5 rounded-lg border border-[#e5e5e5] bg-base-100 hover:bg-[#fafafa] text-left text-xs',
+    class: 'inline-flex items-center gap-1.5 max-w-full align-middle my-0.5 px-2 py-0.5 rounded-lg border border-base-300 bg-base-100 hover:bg-[#1e2230] text-left text-xs',
     onclick: () => focusCard(id),
-  }, pic, el('span', { class: 'font-semibold text-neutral-700 shrink-0' }, t.handle), el('span', { class: 'text-neutral-500 truncate' }, snippet));
+  }, pic, el('span', { class: 'font-semibold text-base-content shrink-0' }, t.handle), el('span', { class: 'text-muted truncate' }, snippet));
 }
 
 function renderAnswer(container, text) {
@@ -194,12 +206,12 @@ function focusCard(id) {
   const c = document.getElementById(`card-${id}`);
   if (!c) return;
   c.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  c.classList.add('ring-2', 'ring-[#2563eb]');
-  setTimeout(() => c.classList.remove('ring-2', 'ring-[#2563eb]'), 2000);
+  c.classList.add('ring-2', 'ring-[#7c8cff]');
+  setTimeout(() => c.classList.remove('ring-2', 'ring-[#7c8cff]'), 2000);
 }
 
 function bubble(side, content) {
-  const body = el('div', { class: side === 'end' ? 'chat-bubble bg-[#171717] text-white text-sm' : 'chat-bubble bg-[#f0f0f0] text-[#171717] text-sm max-w-[95%]' }, content);
+  const body = el('div', { class: side === 'end' ? 'chat-bubble bg-[#2b3350] text-base-content text-sm' : 'chat-bubble bg-base-300 text-base-content text-sm max-w-[95%]' }, content);
   $('chatLog').append(el('div', { class: `chat chat-${side}` }, body));
   $('chatLog').scrollTop = $('chatLog').scrollHeight;
   return body;
@@ -250,7 +262,7 @@ $('chatForm').addEventListener('submit', async (e) => {
 $('newChat').addEventListener('click', () => {
   if (chatBusy) return;
   chatSession = crypto.randomUUID();
-  $('chatLog').replaceChildren(el('p', { id: 'chatEmpty', class: 'text-sm text-neutral-500 px-1' }, 'New chat. Ask about your bookmarks.'));
+  $('chatLog').replaceChildren(el('p', { id: 'chatEmpty', class: 'text-sm text-muted px-1' }, 'New chat. Ask about your bookmarks.'));
 });
 
 chrome.storage.onChanged.addListener((_, area) => area === 'local' && load());

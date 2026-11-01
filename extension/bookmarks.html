@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="bsdark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -14,7 +14,7 @@
     <div class="navbar mx-auto max-w-[640px] min-h-0 gap-2 px-4 py-2">
       <div class="flex items-baseline gap-2 shrink-0">
         <h1 class="text-base font-bold">Bookmarks</h1>
-        <span id="count" class="text-sm text-neutral-500"></span>
+        <span id="count" class="text-sm text-muted"></span>
       </div>
       <input id="search" type="search" placeholder="Search" class="input input-sm flex-1 min-w-0 bg-base-200 border-base-300">
       <button id="sync" class="btn btn-sm">Sync</button>
@@ -38,9 +38,9 @@
       <button id="retry" class="btn btn-xs btn-ghost">Retry</button>
     </div>
     <div id="loggedOut" role="alert" class="alert py-1.5 px-3 text-sm bg-base-100 border-base-300" hidden>
-      <span>Log in to <a href="https://x.com/login" target="_blank" class="text-[#2563eb] hover:underline">x.com</a> so Bookmark Sync can sync your bookmarks</span>
+      <span>Log in to <a href="https://x.com/login" target="_blank" class="text-[#60a5fa] hover:underline">x.com</a> so Bookmark Sync can sync your bookmarks</span>
     </div>
-    <div id="notice" class="text-xs text-neutral-500"></div>
+    <div id="notice" class="text-xs text-muted"></div>
   </div>
   <main id="list" class="mx-auto max-w-[640px] px-4 py-3 flex flex-col gap-2.5"></main>
   </div>
@@ -56,7 +56,7 @@
         <span>Summarizer server not reachable at 127.0.0.1:7391</span>
       </div>
       <div id="chatLog" class="flex-1 overflow-y-auto px-3 py-3 space-y-1">
-        <p id="chatEmpty" class="text-sm text-neutral-500 px-1">Ask about your bookmarks, e.g. "find my SEO stuff and give me a to-do list".</p>
+        <p id="chatEmpty" class="text-sm text-muted px-1">Ask about your bookmarks, e.g. "find my SEO stuff and give me a to-do list".</p>
       </div>
       <form id="chatForm" class="flex gap-2 p-3 border-t border-base-300">
         <input id="chatInput" class="input input-sm flex-1 bg-base-200 border-base-300" placeholder="Ask your bookmarks…" autocomplete="off">
@@ -69,7 +69,7 @@
   <div class="modal-box max-w-lg">
     <h3 class="font-bold text-base mb-3">Summary instructions</h3>
     <textarea id="instructions" rows="6" class="textarea w-full text-sm bg-base-100 border-base-300" placeholder="I'm head of growth at a B2B SaaS company. Summarize in 2 sentences, then explain why this matters for growth and what I could try."></textarea>
-    <p class="text-xs text-neutral-500 mt-2">Used for new summaries and as context in chat. Empty = 1–2 sentence TL;DR. Saving doesn't re-run existing summaries.</p>
+    <p class="text-xs text-muted mt-2">Used for new summaries and as context in chat. Empty = 1–2 sentence TL;DR. Saving doesn't re-run existing summaries.</p>
     <div class="modal-action mt-4">
       <button id="resummarizeAll" class="btn btn-sm mr-auto">Re-summarize all</button>
       <form method="dialog"><button class="btn btn-sm btn-ghost">Cancel</button></form>

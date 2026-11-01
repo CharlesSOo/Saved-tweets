@@ -39,11 +39,19 @@ app.post("/store", async (c) => {
   } catch {
     return c.text("Invalid JSON body", 400);
   }
-  const total = await upsert(Array.isArray(body) ? body : [body], c.req.query("replace") === "1");
+  const records = Array.isArray(body) ? body : [body];
+  const replace = c.req.query("replace") === "1";
+  const total = await upsert(records, replace);
+  console.log(`[store] upsert ${records.length}${replace ? " (replace)" : ""} -> ${total} total`);
   return c.json({ ok: true, total });
 });
 
-app.delete("/store/:id", async (c) => c.json({ ok: true, removed: await remove(c.req.param("id")) }));
+app.delete("/store/:id", async (c) => {
+  const id = c.req.param("id");
+  const removed = await remove(id);
+  console.log(`[store] delete ${id}${removed ? "" : " (not found)"}`);
+  return c.json({ ok: true, removed });
+});
 
 app.post("/chat", async (c) => {
   let body: { message?: string; sessionId?: string; instructions?: string };
