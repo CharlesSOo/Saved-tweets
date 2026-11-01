@@ -280,7 +280,7 @@ async function summarize(id) {
     res = await fetch(`${SERVER}/summarize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(tweet),
+      body: JSON.stringify({ ...tweet, instructions: (await chrome.storage.local.get('summaryInstructions')).summaryInstructions || '' }),
     });
   } catch {
     await chrome.storage.local.set({ serverDown: true });
@@ -289,8 +289,8 @@ async function summarize(id) {
   }
   await chrome.storage.local.set({ serverDown: false });
   if (res.ok) {
-    const { tldr } = await res.json();
-    await mutate((t) => { if (t[id]) Object.assign(t[id], { tldr, status: 'summarized', error: undefined, summarizing: false }); });
+    const { summary } = await res.json();
+    await mutate((t) => { if (t[id]) Object.assign(t[id], { summary, status: 'summarized', error: undefined, summarizing: false }); });
   } else {
     const error = (await res.text()) || `HTTP ${res.status}`;
     await mutate((t) => { if (t[id]) Object.assign(t[id], { status: 'failed', error, summarizing: false }); });
@@ -316,6 +316,11 @@ function enqueueSummarize(id) {
       workers--;
     })();
   }
+}
+
+async function resummarizeAll() {
+  const ids = await mutate((t) => Object.values(t).filter((r) => !r.needsFetch).map((r) => { r.status = 'pending'; return r.id; }));
+  for (const id of ids) if ((await getTweets())[id]?.threadChecked) enqueueSummarize(id);
 }
 
 async function summarizePending() {
@@ -365,6 +370,7 @@ async function syncBookmarks() {
     return { error };
   } finally {
     await chrome.storage.local.set({ syncStatus: { ...status, running: false, error, finishedAt: Date.now() } });
+    pushStore({ full: true });
     drainDetails();
   }
 }
@@ -384,15 +390,21 @@ async function ensureAlarm() {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureAlarm();
-  await mutate((t) => { for (const r of Object.values(t)) delete r.tags; }); // drop tags from older records
+  await mutate((t) => {
+    for (const r of Object.values(t)) {
+      delete r.tags; // tags were dropped
+      if ('tldr' in r) { r.summary ??= r.tldr; delete r.tldr; } // tldr -> summary rename
+    }
+  });
   syncBookmarks(); // drains the detail queue when done
 });
 chrome.runtime.onStartup.addListener(async () => {
   await ensureAlarm();
+  pushStore({ full: true });
   syncBookmarks();
 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === 'autoSync') syncBookmarks();
+  if (a.name === 'autoSync') syncBookmarks(); // its finally pushes the store
   if (a.name === 'detailResume') drainDetails();
 });
 
@@ -425,6 +437,59 @@ chrome.webRequest.onBeforeRequest.addListener(
 );
 // DeleteBookmark is deliberately ignored: removing a bookmark on X never deletes it locally.
 
+// ---------------- Server store (bookmarks.jsonl for chat) ----------------
+// Changes are detected from storage diffs, so every write path (save, detail, summary, delete) is covered.
+// Pushes are debounced 2s and batched; any failure turns the next push into a full replace.
+
+const STORE_FIELDS = ['url', 'author', 'handle', 'text', 'thread', 'quoted', 'links', 'summary', 'createdAt'];
+const storeKey = (r) => JSON.stringify(STORE_FIELDS.map((k) => r[k]));
+const dirtyIds = new Set();
+const deletedIds = new Set();
+let pushTimer = null;
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes.tweets) return;
+  const before = changes.tweets.oldValue || {};
+  const after = changes.tweets.newValue || {};
+  for (const id of Object.keys(before)) if (!(id in after)) { deletedIds.add(id); dirtyIds.delete(id); }
+  for (const [id, r] of Object.entries(after)) {
+    if (r.needsFetch) continue;
+    if (!before[id] || storeKey(before[id]) !== storeKey(r)) { dirtyIds.add(id); deletedIds.delete(id); }
+  }
+  if (dirtyIds.size || deletedIds.size) schedulePush();
+});
+
+function schedulePush() {
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => pushStore(), 2000);
+}
+
+async function pushStore({ full = false } = {}) {
+  clearTimeout(pushTimer);
+  const { storeNeedsFull } = await chrome.storage.local.get('storeNeedsFull');
+  full ||= !!storeNeedsFull;
+  const tweets = await getTweets();
+  const ids = full ? Object.keys(tweets) : [...dirtyIds];
+  const dels = full ? [] : [...deletedIds];
+  if (!full && !ids.length && !dels.length) return;
+  dirtyIds.clear();
+  deletedIds.clear();
+  try {
+    const records = ids.map((id) => tweets[id]).filter((r) => r && !r.needsFetch).map((r) => ({ id: r.id, ...Object.fromEntries(STORE_FIELDS.map((k) => [k, r[k]])) }));
+    if (full || records.length) {
+      const res = await fetch(`${SERVER}/store${full ? '?replace=1' : ''}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(records) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    }
+    for (const id of dels) {
+      const res = await fetch(`${SERVER}/store/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    }
+    if (storeNeedsFull) await chrome.storage.local.set({ storeNeedsFull: false });
+  } catch {
+    await chrome.storage.local.set({ storeNeedsFull: true }); // retried as a full push on the next trigger
+  }
+}
+
 // ---------------- Export / messages ----------------
 
 function toMarkdown(tweets) {
@@ -432,7 +497,7 @@ function toMarkdown(tweets) {
     .sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''))
     .map((t) => {
       const lines = [`## ${t.author} (${t.handle}) — ${(t.createdAt || '').slice(0, 10)}`, '', t.url, '', t.thread || t.text];
-      if (t.tldr) lines.push('', `**TL;DR:** ${t.tldr}`);
+      if (t.summary) lines.push('', '**Summary:**', '', t.summary);
       return lines.join('\n');
     })
     .join('\n\n');
@@ -447,6 +512,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'xApi': await learnApi(msg); return { ok: true };
       case 'summarize': enqueueSummarize(msg.id); return { ok: true };
       case 'summarizePending': await summarizePending(); return { ok: true };
+      case 'resummarizeAll': await resummarizeAll(); return { ok: true };
       case 'syncBookmarks': return syncBookmarks();
       case 'syncIfStale': return syncIfStale();
       case 'delete': await mutate((t) => { delete t[msg.id]; }); return { ok: true };

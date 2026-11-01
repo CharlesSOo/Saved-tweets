@@ -1,6 +1,6 @@
 # Bookmark Sync
 
-Chrome extension (MV3) that captures your X/Twitter bookmarks into `chrome.storage.local`, plus a local Bun/Hono server that summarizes each one (a TL;DR) with `pi` (or `claude`).
+Chrome extension (MV3) that captures your X/Twitter bookmarks into `chrome.storage.local`, plus a local Bun/Hono server that summarizes each one and lets you chat over them with `pi` (or `claude`).
 
 ## Install
 
@@ -30,12 +30,22 @@ The viewer's CSS (`extension/bookmarks.css`) is compiled from `extension/styles.
 cd extension && bun install && bun run build:css
 ```
 
+## Server endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | liveness |
+| `POST /summarize` | tweet record + `instructions` → `{summary}` (Markdown) |
+| `POST /store[?replace=1]` | upsert record(s) into `data/bookmarks.jsonl` |
+| `DELETE /store/:id` | remove a record |
+| `POST /chat` | `{message, sessionId?, instructions?}` → streamed plain-text Markdown |
+
 ## Environment variables (server)
 
 | Var | Effect |
 | --- | --- |
 | `BOOKMARK_SYNC_MODEL` | Passed as `--model` to the CLI |
-| `BOOKMARK_SYNC_CLI=claude` | Use `claude -p --output-format json` instead of `pi -p --no-tools` |
+| `BOOKMARK_SYNC_CLI=claude` | Use `claude -p --output-format text` instead of `pi` (chat then uses Read/Grep/Glob and does not stream incrementally) |
 
 ## How it works
 
@@ -46,13 +56,15 @@ No tab is ever opened on X. All X data fetching happens in the service worker.
 - **Click capture:** the worker watches the `CreateBookmark` request (`chrome.webRequest`) for `variables.tweet_id`. `DeleteBookmark` is ignored, so un-bookmarking on X never deletes locally. Content comes from the tab's cache of tweets parsed from X's GraphQL responses, then the tab's DOM, then a `TweetDetail` call from the worker. If all fail, a stub ("content not captured") is stored and filled by the background TweetDetail queue.
 - **Sync:** `Bookmarks` with `count: 100`, paging on the `cursor-bottom` entry with ~1s between pages, up to 2000 tweets. The first sync is full; later syncs stop at the first page that is entirely already stored. Existing records are never overwritten. Incremental syncs also run on browser startup, on install/update, every 10 minutes (alarm, recreated on install and startup), so it all runs while Chrome is open without the viewer, and when the viewer opens if the last sync finished more than 5 minutes ago.
 - **Threads and missing content:** every new record gets one `TweetDetail` fetch in the background (concurrency 1, 1.5s apart; on HTTP 429 it pauses until `x-rate-limit-reset` via an alarm). That fills stub records and attaches the author's self-reply thread, then the record is summarized. Records with `threadChecked: false` form the queue, so it resumes after worker restarts. Two failures: summarize with what we have and note the error on the card. The viewer shows "Fetching threads n/N".
-- **Summaries:** each new record is queued (2 at a time) and POSTed to `127.0.0.1:7391/summarize`. The server fetches up to 3 external links with `curl_chrome` and returns `{tldr}`. If the server is unreachable the record stays pending and the viewer shows a banner with Retry.
+- **Summaries:** after the TweetDetail fetch, each record is POSTed (2 at a time) to `/summarize` together with your **summary instructions** (gear icon in the viewer; stored as `summaryInstructions`). The server fetches up to 3 external links with `curl_chrome`, appends your instructions to fixed grounding rules (only use the tweet, thread, quoted tweet and linked pages; don't invent facts), and returns `{summary}` as Markdown (default without instructions: a 1–2 sentence TL;DR). Changing instructions only affects new summaries; "Re-summarize all" in the settings modal re-runs everything. If the server is unreachable the record stays pending and the viewer shows a banner with Retry.
+- **Chat:** the "Chat" drawer sends `{message, sessionId, instructions}` to `/chat`. The server runs `pi -p --no-session --mode json --tools read,grep,find,ls` (read-only, no bash/edit/write) with `data/` as cwd, so it greps `data/bookmarks.jsonl`, and streams the answer's text deltas back. Answers cite bookmarks as `[[tweet:<id>]]`, which the viewer renders as mini cards; clicking one scrolls to and highlights that bookmark. Conversation history (last 20 turns) is kept in server memory per session and sent as a transcript; the drawer's history is in-memory only.
+- **Server store:** the extension mirrors its records to `data/bookmarks.jsonl` (gitignored) via `POST /store` (upsert; `?replace=1` for a full push) and `DELETE /store/:id`. Changes are pushed 2s debounced; a full push runs on browser startup and after each sync; if the server was down the next push is a full one.
 - **Export:** JSON (all records) or Markdown (one section per tweet), from the top bar's ⋯ menu.
 
 ## Tests
 
 ```sh
-cd extension && bun test   # GraphQL normalizer + API discovery (fixtures/ are excerpts of X's real bundles)
+cd extension && bun test   # GraphQL normalizer, API discovery, Markdown renderer (fixtures/ are excerpts of X's real bundles)
 ```
 
 ## Limitations
