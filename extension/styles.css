@@ -1,0 +1,25 @@
+@import "tailwindcss" source(none);
+@source "./bookmarks.html";
+@source "./bookmarks.js";
+@plugin "daisyui" {
+  themes: light --default;
+}
+@plugin "daisyui/theme" {
+  name: "light";
+  default: true;
+  --color-base-100: #ffffff;
+  --color-base-200: #f5f5f5;
+  --color-base-300: #e5e5e5;
+  --color-base-content: #171717;
+  --color-primary: #171717;
+  --color-primary-content: #ffffff;
+  --color-neutral: #404040;
+  --color-neutral-content: #ffffff;
+  --color-warning: #fef3c7;
+  --color-warning-content: #713f12;
+  --radius-box: 0.75rem;
+  --radius-field: 0.5rem;
+  --radius-selector: 1rem;
+}
+html, body { background: #f5f5f5; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }

@@ -1,0 +1,13 @@
+{
+  "name": "bookmark-sync-extension",
+  "private": true,
+  "scripts": {
+    "build:css": "tailwindcss -i styles.css -o bookmarks.css --minify",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "daisyui": "^5.0.0",
+    "tailwindcss": "^4.1.0"
+  }
+}

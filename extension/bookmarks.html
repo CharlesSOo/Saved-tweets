@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bookmark Sync</title>
+  <link rel="stylesheet" href="bookmarks.css">
+</head>
+<body class="min-h-screen bg-base-200 text-base-content">
+  <header class="sticky top-0 z-20 bg-base-100 border-b border-base-300">
+    <div class="navbar mx-auto max-w-[640px] min-h-0 gap-2 px-4 py-2">
+      <div class="flex items-baseline gap-2 shrink-0">
+        <h1 class="text-base font-bold">Bookmarks</h1>
+        <span id="count" class="text-sm text-neutral-500"></span>
+      </div>
+      <input id="search" type="search" placeholder="Search" class="input input-sm flex-1 min-w-0 bg-base-200 border-base-300">
+      <button id="sync" class="btn btn-sm">Sync</button>
+      <button id="pending" class="btn btn-sm">Summarize pending (0)</button>
+      <div class="dropdown dropdown-end">
+        <div tabindex="0" role="button" class="btn btn-sm btn-ghost btn-square" aria-label="More">⋯</div>
+        <ul tabindex="0" class="dropdown-content menu menu-sm z-30 mt-1 w-44 rounded-box border border-base-300 bg-base-100 p-1 shadow-sm">
+          <li><button id="exportJson">Export JSON</button></li>
+          <li><button id="exportMd">Export Markdown</button></li>
+        </ul>
+      </div>
+    </div>
+  </header>
+  <div class="mx-auto max-w-[640px] px-4 pt-3 space-y-2">
+    <div id="banner" role="alert" class="alert alert-warning alert-soft py-1.5 px-3 text-sm" hidden>
+      <span>Summarizer server not reachable at 127.0.0.1:7391</span>
+      <button id="retry" class="btn btn-xs btn-ghost">Retry</button>
+    </div>
+    <div id="needApi" role="alert" class="alert py-1.5 px-3 text-sm bg-base-100 border-base-300" hidden>
+      <span>Open x.com once so Bookmark Sync can learn X's API</span>
+    </div>
+    <div id="notice" class="text-xs text-neutral-500"></div>
+  </div>
+  <main id="list" class="mx-auto max-w-[640px] px-4 py-3 flex flex-col gap-2.5"></main>
+  <script src="bookmarks.js"></script>
+</body>
+</html>
