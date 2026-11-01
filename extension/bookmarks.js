@@ -1,6 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let state = { tweets: {}, serverDown: false, syncStatus: null, loggedOut: false };
-let notice = '';
+let state = { tweets: {}, serverDown: false, syncStatus: null, loggedOut: false, detailProgress: null };
 
 const send = (msg) => chrome.runtime.sendMessage(msg);
 
@@ -50,12 +49,6 @@ function menuItem(label, onclick) {
   return el('li', {}, el('button', { onclick: (e) => { document.activeElement?.blur(); onclick(e); } }, label));
 }
 
-async function fetchThread(id) {
-  const res = await send({ type: 'fetchThread', id });
-  notice = res?.error || '';
-  render();
-}
-
 function statusLabel(t) {
   if (t.summarizing) return el('span', { class: 'flex items-center gap-1 text-xs text-neutral-500' }, el('span', { class: 'loading loading-spinner loading-xs' }), 'Summarizing');
   const label = t.needsFetch ? 'content not captured' : t.status === 'summarized' ? null : t.status;
@@ -83,7 +76,6 @@ function card(t) {
           el('div', { tabindex: '0', role: 'button', class: 'btn btn-ghost btn-sm btn-circle text-neutral-500', 'aria-label': 'Actions' }, '⋯'),
           el('ul', { tabindex: '0', class: 'dropdown-content menu menu-sm z-10 w-40 rounded-box border border-base-300 bg-base-100 p-1 shadow-sm' },
             !t.needsFetch && menuItem('Summarize', () => send({ type: 'summarize', id: t.id })),
-            menuItem(t.needsFetch ? 'Fetch content' : t.thread ? 'Refetch thread' : 'Fetch thread', () => fetchThread(t.id)),
             menuItem('Open on X', () => window.open(t.url, '_blank')),
             menuItem('Delete', () => confirm('Delete this bookmark?') && send({ type: 'delete', id: t.id })),
           ),
@@ -98,6 +90,7 @@ function card(t) {
       t.quoted && el('div', { class: 'border border-[#e5e5e5] rounded-lg p-3 text-sm text-neutral-600 whitespace-pre-wrap break-words' }, linkify(t.quoted)),
       t.tldr && el('div', { class: 'bg-[#fafafa] border-l-2 border-[#d4d4d4] rounded-r-md px-3 py-2' },
         el('p', { class: 'text-sm text-[#404040]' }, t.tldr)),
+      t.detailError && el('p', { class: 'text-xs text-neutral-500' }, t.detailError),
       t.error && el('p', { class: 'text-xs text-neutral-500 whitespace-pre-wrap' }, t.error),
     ),
   );
@@ -121,14 +114,16 @@ function render() {
   $('sync').disabled = !!running;
   $('sync').replaceChildren(...(running ? [el('span', { class: 'loading loading-spinner loading-xs' }), `Syncing ${s.count}`] : ['Sync']));
   const syncLine = !s || running ? '' : s.error ? `Last sync failed: ${s.error}` : `Last sync ${new Date(s.finishedAt).toLocaleString()}: ${s.count} seen, ${s.added} new`;
-  $('notice').textContent = [notice, syncLine].filter(Boolean).join(' · ');
+  const d = state.detailProgress;
+  const detailLine = d?.running ? `Fetching threads ${d.done}/${d.total}` : '';
+  $('notice').textContent = [detailLine, syncLine].filter(Boolean).join(' · ');
 
 
   $('list').replaceChildren(...(shown.length ? shown.map(card) : [el('p', { class: 'text-center text-sm text-neutral-500 py-10' }, 'No bookmarks.')]));
 }
 
 async function load() {
-  state = { tweets: {}, serverDown: false, syncStatus: null, loggedOut: false, ...(await chrome.storage.local.get(['tweets', 'serverDown', 'syncStatus', 'loggedOut'])) };
+  state = { tweets: {}, serverDown: false, syncStatus: null, loggedOut: false, detailProgress: null, ...(await chrome.storage.local.get(['tweets', 'serverDown', 'syncStatus', 'loggedOut', 'detailProgress'])) };
   render();
 }
 

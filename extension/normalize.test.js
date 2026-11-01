@@ -78,3 +78,14 @@ test('threadFromTweetDetail takes leading same-author replies', () => {
   expect(N.threadFromTweetDetail(detail, '1')).toBe('1/ start\n\n2/ middle\n\n3/ end');
   expect(N.threadFromTweetDetail(detail, 'nope')).toBeNull();
 });
+
+test('threadFromTweetDetail returns null for a single-tweet TweetDetail', () => {
+  const t = { __typename: 'Tweet', rest_id: '7', core: { user_results: user('solo', 'Solo') }, legacy: { full_text: 'just one', created_at: 'Wed Oct 08 12:34:56 +0000 2025' } };
+  const reply = { __typename: 'Tweet', rest_id: '8', core: { user_results: user('other', 'Other') }, legacy: { full_text: 'a reply', created_at: 'Wed Oct 08 12:34:56 +0000 2025' } };
+  const detail = { data: { threaded_conversation_with_injections_v2: { instructions: [{ entries: [
+    { entryId: 'tweet-7', content: { itemContent: { tweet_results: { result: t } } } },
+    { entryId: 'conversationthread-8', content: { items: [{ item: { itemContent: { tweet_results: { result: reply } } } }] } },
+  ] }] } } };
+  expect(N.threadFromTweetDetail(detail, '7')).toBeNull();
+  expect(N.threadFromTweetDetail({ data: { threaded_conversation_with_injections_v2: { instructions: [{ entries: [detail.data.threaded_conversation_with_injections_v2.instructions[0].entries[0]] }] } } }, '7')).toBeNull();
+});

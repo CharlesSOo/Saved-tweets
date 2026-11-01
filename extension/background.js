@@ -107,7 +107,8 @@ async function sessionCookie() {
 
 // Runs inside an already-open x.com tab (MAIN world) when the worker's own request isn't authenticated.
 function fetchInPage(url, headers) {
-  return fetch(url, { credentials: 'include', headers }).then(async (r) => ({ status: r.status, text: await r.text() }));
+  return fetch(url, { credentials: 'include', headers })
+    .then(async (r) => ({ status: r.status, text: await r.text(), reset: r.headers.get('x-rate-limit-reset') }));
 }
 
 async function xGraphql(op, variables, retried = false) {
@@ -127,10 +128,12 @@ async function xGraphql(op, variables, retried = false) {
 
   let status = 0;
   let text = '';
+  let reset = null;
   try {
     const res = await fetch(url, { credentials: 'include', headers });
     status = res.status;
     text = await res.text();
+    reset = res.headers.get('x-rate-limit-reset');
   } catch (e) {
     text = String(e);
   }
@@ -139,14 +142,18 @@ async function xGraphql(op, variables, retried = false) {
     const [tab] = await chrome.tabs.query({ url: ['https://x.com/*', 'https://twitter.com/*'] });
     if (tab) {
       const [res] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', func: fetchInPage, args: [url, headers] });
-      ({ status, text } = res.result);
+      ({ status, text, reset } = res.result);
     }
   }
   if ((status === 400 || status === 404) && !retried) {
     await invalidateApi(op);
     return xGraphql(op, variables, true);
   }
-  if (status === 429) throw new Error('X rate limit hit, try again later');
+  if (status === 429) {
+    const err = new Error('X rate limit hit');
+    err.resetAt = reset ? Number(reset) * 1000 : Date.now() + 15 * 60 * 1000;
+    throw err;
+  }
   if (status < 200 || status >= 300) throw new Error(`X ${op} failed: HTTP ${status} ${text.slice(0, 200)}`);
   const json = JSON.parse(text);
   if (json.errors?.length && !json.data) throw new Error(`X ${op}: ${json.errors[0].message}`);
@@ -172,62 +179,101 @@ const normalized = (json) => {
 };
 
 async function save(tweet) {
-  const shouldSummarize = await mutate((t) => {
+  const next = await mutate((t) => {
     const existing = t[tweet.id];
     if (existing && !existing.needsFetch) {
-      if (tweet.source === 'sync') return false; // never overwrite on sync
+      if (tweet.source === 'sync') return null; // never overwrite on sync
       Object.assign(existing, { ...tweet, savedAt: existing.savedAt, source: existing.source, status: existing.status });
-      return existing.status !== 'summarized';
+      return existing.threadChecked && existing.status !== 'summarized' ? 'summarize' : null;
     }
     const { needsFetch, ...rest } = tweet;
-    t[tweet.id] = { ...rest, savedAt: existing?.savedAt || new Date().toISOString(), status: 'pending', ...(needsFetch ? { needsFetch } : {}) };
-    return !needsFetch;
+    t[tweet.id] = { ...rest, savedAt: existing?.savedAt || new Date().toISOString(), status: 'pending', threadChecked: false, ...(needsFetch ? { needsFetch } : {}) };
+    return 'detail';
   });
-  if (shouldSummarize) enqueueSummarize(tweet.id);
+  if (next === 'summarize') enqueueSummarize(tweet.id);
+  if (next === 'detail') drainDetails();
 }
 
-// Fills a stub and/or its thread from TweetDetail.
+// ---------------- TweetDetail queue (stub content + thread) ----------------
+// Every new record gets exactly one successful TweetDetail fetch (threadChecked), then is summarized.
+// State lives in storage, so the queue is rebuilt from `!threadChecked` records after worker restarts.
+
+const DETAIL_SPACING_MS = 1500;
+const DETAIL_MAX_ATTEMPTS = 2;
+
 async function fetchDetail(id) {
   const json = await tweetDetail(id);
   const rec = normalized(json).get(id);
   const thread = N.threadFromTweetDetail(json, id);
-  const wasStub = await mutate((t) => {
+  return mutate((t) => {
     const cur = t[id];
     if (!cur) return false;
-    const stub = !!cur.needsFetch;
-    if (stub && rec) {
+    const wasStub = !!cur.needsFetch;
+    if (wasStub && rec) {
       delete cur.needsFetch;
       Object.assign(cur, rec);
     }
-    cur.threadTried = true;
+    const newThread = !!thread && thread !== cur.thread;
     if (thread) cur.thread = thread;
-    return stub && !!rec;
+    cur.threadChecked = true;
+    delete cur.detailAttempts;
+    delete cur.detailError;
+    if (wasStub && !rec) cur.detailError = 'Tweet not found in TweetDetail response';
+    return !cur.needsFetch && (cur.status !== 'summarized' || newThread);
   });
-  return { wasStub, thread };
 }
 
-async function fetchThread(id) {
+let draining = false;
+async function drainDetails() {
+  if (draining) return;
+  draining = true;
+  let done = 0;
   try {
-    await fetchDetail(id);
-    return { ok: true };
-  } catch (e) {
-    return { error: e.message };
+    while (true) {
+      const { rateLimitedUntil = 0 } = await chrome.storage.local.get('rateLimitedUntil');
+      if (Date.now() < rateLimitedUntil) {
+        chrome.alarms.create('detailResume', { when: rateLimitedUntil + 1000 });
+        break;
+      }
+      const todo = Object.values(await getTweets())
+        .filter((t) => !t.threadChecked)
+        .sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''));
+      await chrome.storage.local.set({ detailProgress: { running: todo.length > 0, done, total: done + todo.length } });
+      if (!todo.length) break;
+      const { id } = todo[0];
+      try {
+        if (await fetchDetail(id)) enqueueSummarize(id);
+      } catch (e) {
+        if (e.resetAt) {
+          await chrome.storage.local.set({ rateLimitedUntil: e.resetAt });
+          continue; // loop sees rateLimitedUntil and schedules the resume alarm
+        }
+        if (e.message === LOGGED_OUT) break;
+        const giveUp = await mutate((t) => {
+          const cur = t[id];
+          if (!cur) return false;
+          cur.detailAttempts = (cur.detailAttempts || 0) + 1;
+          if (cur.detailAttempts < DETAIL_MAX_ATTEMPTS) return false;
+          Object.assign(cur, { threadChecked: true, detailError: `Thread/content fetch failed: ${e.message}` });
+          return !cur.needsFetch && cur.status !== 'summarized';
+        });
+        if (giveUp) enqueueSummarize(id);
+      }
+      done++;
+      await sleep(DETAIL_SPACING_MS);
+    }
+  } finally {
+    draining = false;
+    const { detailProgress } = await chrome.storage.local.get('detailProgress');
+    if (detailProgress?.running) await chrome.storage.local.set({ detailProgress: { ...detailProgress, running: false } });
   }
 }
 
 // ---------------- Summaries ----------------
 
-const THREAD_MARKER = /(🧵|\(?1\/\d*\)?|thread:?|a thread[.!:]?)\s*(👇|⬇️)?\s*$/i;
-const looksLikeThreadStart = (text) => /🧵/.test(text) || /^thread:/i.test(text.trim()) || THREAD_MARKER.test(text.trim());
-
 async function summarize(id) {
-  let tweet = (await getTweets())[id];
+  const tweet = (await getTweets())[id];
   if (!tweet || tweet.needsFetch) return;
-  if (!tweet.thread && !tweet.threadTried && looksLikeThreadStart(tweet.text || '')) {
-    try { await fetchDetail(id); } catch { /* summarize without the thread */ }
-    tweet = (await getTweets())[id];
-    if (!tweet) return;
-  }
   await mutate((t) => { if (t[id]) t[id].summarizing = true; });
   let res;
   try {
@@ -251,7 +297,7 @@ async function summarize(id) {
   }
 }
 
-// Concurrency-2 summarize queue, shared by saves and "Summarize pending".
+// Concurrency-2 summarize queue (local server, not X).
 const summarizeQueue = [];
 const queued = new Set();
 let workers = 0;
@@ -273,11 +319,10 @@ function enqueueSummarize(id) {
 }
 
 async function summarizePending() {
-  const tweets = Object.values(await getTweets());
-  for (const t of tweets.filter((x) => x.needsFetch)) {
-    try { if ((await fetchDetail(t.id)).wasStub) enqueueSummarize(t.id); } catch { break; }
+  for (const t of Object.values(await getTweets())) {
+    if (t.threadChecked && !t.needsFetch && t.status !== 'summarized') enqueueSummarize(t.id);
   }
-  for (const t of tweets) if (t.status !== 'summarized' && !t.needsFetch) enqueueSummarize(t.id);
+  drainDetails();
 }
 
 // ---------------- Sync ----------------
@@ -320,6 +365,7 @@ async function syncBookmarks() {
     return { error };
   } finally {
     await chrome.storage.local.set({ syncStatus: { ...status, running: false, error, finishedAt: Date.now() } });
+    drainDetails();
   }
 }
 
@@ -329,16 +375,26 @@ async function syncIfStale() {
   return { ok: true, skipped: true };
 }
 
+// Background loop while Chrome is open: alarm-driven, independent of the viewer.
+const SYNC_PERIOD_MIN = 10;
+async function ensureAlarm() {
+  const a = await chrome.alarms.get('autoSync');
+  if (!a || a.periodInMinutes !== SYNC_PERIOD_MIN) await chrome.alarms.create('autoSync', { periodInMinutes: SYNC_PERIOD_MIN });
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
-  chrome.alarms.create('autoSync', { periodInMinutes: 30 });
+  await ensureAlarm();
   await mutate((t) => { for (const r of Object.values(t)) delete r.tags; }); // drop tags from older records
+  syncBookmarks(); // drains the detail queue when done
+});
+chrome.runtime.onStartup.addListener(async () => {
+  await ensureAlarm();
   syncBookmarks();
 });
-chrome.runtime.onStartup.addListener(() => {
-  chrome.alarms.create('autoSync', { periodInMinutes: 30 });
-  syncBookmarks();
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === 'autoSync') syncBookmarks();
+  if (a.name === 'detailResume') drainDetails();
 });
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'autoSync') syncBookmarks(); });
 
 // ---------------- Click capture: X's CreateBookmark mutation ----------------
 
@@ -349,7 +405,6 @@ async function onCreateBookmark(id, tabId) {
   }
   if (tweet) return save({ ...tweet, source: 'click' });
   await save({ id, url: `https://x.com/i/web/status/${id}`, author: '', handle: '', text: '', media: [], links: [], createdAt: new Date().toISOString(), source: 'click', needsFetch: true });
-  try { if ((await fetchDetail(id)).wasStub) enqueueSummarize(id); } catch { /* stays a stub */ }
 }
 
 function bookmarkIdFrom(details) {
@@ -392,7 +447,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'xApi': await learnApi(msg); return { ok: true };
       case 'summarize': enqueueSummarize(msg.id); return { ok: true };
       case 'summarizePending': await summarizePending(); return { ok: true };
-      case 'fetchThread': return fetchThread(msg.id);
       case 'syncBookmarks': return syncBookmarks();
       case 'syncIfStale': return syncIfStale();
       case 'delete': await mutate((t) => { delete t[msg.id]; }); return { ok: true };
